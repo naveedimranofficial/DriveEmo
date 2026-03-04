@@ -1,0 +1,131 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+from scipy.signal import stft
+from scipy.stats import skew, kurtosis
+import cv2
+
+def read_radar_data(filename, num_frames, num_chirps, num_samples_per_chirp, num_rx_antennas):
+    dtype = np.dtype([('real', np.int16), ('imag', np.int16)])
+    raw_data = np.fromfile(filename, dtype=dtype)
+    complex_data = raw_data['real'].astype(np.float32) + 1j * raw_data['imag'].astype(np.float32)
+    data = complex_data.reshape((num_frames, num_chirps, num_samples_per_chirp, num_rx_antennas))
+    return data.mean(axis=-1)  # Averaging across antennas
+
+def generate_micro_doppler(data, num_chirps):
+    # Apply Blackman-Harris window along chirps
+    window = np.blackman(num_chirps)[:, None]
+    # Perform FFT along chirps with zero-padding for higher resolution
+    n_fft = 512  # Increase FFT points
+    fft_data = np.fft.fft(data * window, n=n_fft, axis=1)
+    fft_data = np.fft.fftshift(fft_data, axes=1)
+    micro_doppler = 20 * np.log10(np.abs(fft_data).mean(axis=2) + 1)
+    return micro_doppler.T  # Transpose for time-frequency layout
+
+def extract_velocity_profile(micro_doppler, threshold=0.5):
+    # Extract velocity profile from the micro-Doppler signature
+    velocity_profile = np.max(micro_doppler, axis=0)
+    velocity_profile[velocity_profile < threshold * np.max(velocity_profile)] = 0
+    return velocity_profile
+
+def plot_velocity_profile(velocity_profile):
+    plt.figure(figsize=(10, 4))
+    plt.plot(velocity_profile)
+    plt.ylabel('Velocity')
+    plt.xlabel('Time (frames)')
+    plt.title('Velocity Profile')
+    plt.show()
+
+def compute_velocity_statistics(velocity_profile):
+    mean_velocity = np.mean(velocity_profile)
+    median_velocity = np.median(velocity_profile)
+    std_velocity = np.std(velocity_profile)
+    max_velocity = np.max(velocity_profile)
+    min_velocity = np.min(velocity_profile)
+    variance_velocity = np.var(velocity_profile)
+    skewness_velocity = skew(velocity_profile)
+    kurtosis_velocity = kurtosis(velocity_profile)
+
+    # Additional features
+    acceleration = np.diff(velocity_profile)
+    mean_acceleration = np.mean(acceleration)
+    std_acceleration = np.std(acceleration)
+    max_acceleration = np.max(acceleration)
+    jerkiness = np.mean(np.abs(np.diff(acceleration)))
+
+    stats = {
+        'Mean Velocity': mean_velocity,
+        'Median Velocity': median_velocity,
+        'Standard Deviation': std_velocity,
+        'Max Velocity': max_velocity,
+        'Min Velocity': min_velocity,
+        'Variance': variance_velocity,
+        'Skewness': skewness_velocity,
+        'Kurtosis': kurtosis_velocity,
+        'Mean Acceleration': mean_acceleration,
+        'Std Acceleration': std_acceleration,
+        'Max Acceleration': max_acceleration,
+        'Jerkiness': jerkiness
+    }
+
+    return stats
+
+def compute_optical_flow(data):
+    # Compute optical flow between consecutive frames
+    flows = []
+    for i in range(1, data.shape[0]):
+        flow = cv2.calcOpticalFlowFarneback(data[i-1], data[i], None, 0.5, 3, 15, 3, 5, 1.2, 0)
+        mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+        flows.append((mag, ang))
+    return flows
+
+def compute_zero_crossing_rate(signal):
+    # Compute zero-crossing rate
+    zero_crossings = np.sum(np.abs(np.diff(np.sign(signal)))) / 2
+    return zero_crossings / len(signal)
+
+def compute_rms_value(signal):
+    # Compute RMS value
+    return np.sqrt(np.mean(signal ** 2))
+
+filename = r'C:/Users/Naveed Imran/OneDrive/Desktop/mm-BodyEmo/Dataset/Naveed/New Dataset/Naveed/p13_Angry_StampingFeet_Raw_0.bin'
+num_frames = 100
+num_chirps = 128
+num_samples_per_chirp = 200
+num_rx_antennas = 4
+
+# Read and preprocess radar data
+radar_data = read_radar_data(filename, num_frames, num_chirps, num_samples_per_chirp, num_rx_antennas)
+
+# Generate micro-Doppler signature
+micro_doppler_signature = generate_micro_doppler(radar_data, num_chirps)
+
+# Plot micro-Doppler signature
+plt.figure(figsize=(15, 7))
+plt.imshow(micro_doppler_signature, aspect='auto', cmap='jet', norm=colors.LogNorm(vmin=np.min(micro_doppler_signature[micro_doppler_signature > 0]), vmax=np.max(micro_doppler_signature)))
+plt.colorbar(label='Intensity (dB)')
+plt.xlabel('Time (frames)')
+plt.ylabel('Doppler Frequency')
+plt.title('Micro-Doppler Signature for PassiveWeight')
+plt.show()
+
+# Extract and plot velocity profile
+velocity_profile = extract_velocity_profile(micro_doppler_signature)
+plot_velocity_profile(velocity_profile)
+
+# Compute and print velocity statistics
+velocity_stats = compute_velocity_statistics(velocity_profile)
+print("Velocity Profile Statistics:")
+for stat, value in velocity_stats.items():
+    print(f"{stat}: {value:.2f}")
+
+# Compute Optical Flow
+flows = compute_optical_flow(radar_data.real)  # Use real part of data for optical flow
+
+# Compute Zero-Crossing Rate
+zcr = compute_zero_crossing_rate(velocity_profile)
+print(f"Zero-Crossing Rate: {zcr:.2f}")
+
+# Compute RMS Value
+rms_value = compute_rms_value(velocity_profile)
+print(f"RMS Value: {rms_value:.2f}")
